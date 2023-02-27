@@ -1,37 +1,51 @@
 # To assist in cross-compiling
-CC=gcc
-LDFLAGS=-pthread -L./lusb_build/lib -lusb-1.0
-TOPDIR=$(shell pwd)
+CC      = $(CROSS_COMPILE)gcc
+WINDRES = $(CROSS_COMPILE)windres
 
-EEPROM_SUPPORT = y
+LIBUSB_BUILD_PATH ?= $(shell pwd)/libusb_build
+EEPROM_SUPPORT    ?= y
 
-BIGFILES=-D_FILE_OFFSET_BITS=64
-CFLAGS=-O2 -std=gnu99 -static -Wall -I./lusb_build/include $(BIGFILES)
+OBJS    += flashcmd_api.o spi_controller.o spi_nand_flash.o spi_nor_flash.o ch341a_spi.o timer.o main.o
+CFLAGS  += -D_FILE_OFFSET_BITS=64
+CFLAGS  += -O2 -std=gnu99 -Wall
 
-OBJS= flashcmd_api.o spi_controller.o spi_nand_flash.o spi_nor_flash.o ch341a_spi.o timer.o main.o
+CFLAGS  += -I$(LIBUSB_BUILD_PATH)/include
+LDFLAGS += -Bstatic -L$(LIBUSB_BUILD_PATH)/lib -lusb-1.0 -Bdynamic
 
 ifeq ($(EEPROM_SUPPORT),y)
 CFLAGS += -DEEPROM_SUPPORT
-OBJS += ch341a_i2c.o i2c_eeprom.o spi_eeprom.o
-OBJS += bitbang_microwire.o mw_eeprom.o ch341a_gpio.o
+OBJS   += ch341a_i2c.o i2c_eeprom.o spi_eeprom.o
+OBJS   += bitbang_microwire.o mw_eeprom.o ch341a_gpio.o
+endif
+
+ifneq (,$(findstring mingw,$(shell $(CC) -dumpmachine)))
+# Target: Windows
+CFLAGS += -posix
+OBJS   += res.o
+endif
+
+ifneq (,$(findstring darwin,$(shell $(CC) -dumpmachine)))
+# Target: MacOS
+CFLAGS  += -Wno-gnu-designator
+LDFLAGS += -lobjc -Wl,-framework,IOKit -Wl,-framework,CoreFoundation -Wl,-framework,Security
 endif
 
 all: SNANDer
 
-.lusb_install:
-	mkdir -p lusb_build
-	cd lusb_build; \
-	../libusb-1.0.26/configure --prefix=$(TOPDIR)/lusb_build --disable-udev; \
+$(LIBUSB_BUILD_PATH)/.installed:
+	mkdir -p $(LIBUSB_BUILD_PATH)
+	cd $(LIBUSB_BUILD_PATH); \
+	../libusb-1.0.26/configure --host=$(CROSS_COMPILE:-=) --prefix=$(LIBUSB_BUILD_PATH) --disable-udev; \
 	make; \
 	make install
 	touch $@
 
-SNANDer: .lusb_install $(OBJS)
+res.o: snander.rc
+	$(WINDRES) -o $@ -i $<
+
+SNANDer: $(LIBUSB_BUILD_PATH)/.installed $(OBJS)
 	$(CC) $(CFLAGS) -s -o $@ $(OBJS) $(LDFLAGS)
 
-.c.o:
-	$(CC) $(CFLAGS) -c $<
-
 clean: 
-	rm -f *.o SNANDer* .lusb_install*
-	rm -rf lusb_build*
+	rm -f *.o SNANDer*
+	rm -rf $(LIBUSB_BUILD_PATH)
